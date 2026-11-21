@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>yt_viewer</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<meta name="theme-color" content="#101B1F">
+<style>
+:root {
+  --bg: #F1F4F3;
+  --ink: #15252B;
+  --muted: #5C6C72;
+  --line: #D3DCDA;
+  --accent: #2447D6;
+  --accent-ink: #FFFFFF;
+  --danger: #B3261E;
+  --field: #FFFFFF;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101B1F;
+    --ink: #E7EEF0;
+    --muted: #8FA1A8;
+    --line: #25353B;
+    --accent: #8CA2FF;
+    --accent-ink: #0B1230;
+    --danger: #FF8A80;
+    --field: #18272D;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+}
+main { max-width: 640px; margin: 0 auto; padding: 20px 18px 96px; }
+header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+h1 { font-size: 30px; line-height: 1.1; margin: 0; font-weight: 750; letter-spacing: -0.01em; }
+#status { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+button { font: inherit; color: inherit; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.link { background: none; border: 0; padding: 10px 0 10px 10px; color: var(--accent); font-weight: 600; cursor: pointer; }
+.add { display: flex; gap: 8px; }
+input {
+  font: inherit; width: 100%; min-width: 0; padding: 13px 14px;
+  border: 1.5px solid var(--line); border-radius: 10px;
+  background: var(--field); color: var(--ink);
+}
+.primary {
+  background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 10px;
+  padding: 0 18px; font-weight: 700; cursor: pointer; min-height: 48px; white-space: nowrap;
+}
+.primary:disabled { opacity: 0.5; }
+ul { list-style: none; margin: 22px 0 0; padding: 0; border-top: 1px solid var(--line); }
+li { padding: 14px 0; border-bottom: 1px solid var(--line); }
+.title {
+  font-weight: 600; overflow: hidden; word-break: break-word;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+}
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
+.when { color: var(--muted); font-size: 14px; }
+.del {
+  background: none; border: 1.5px solid var(--line); border-radius: 8px;
+  padding: 8px 14px; color: var(--danger); font-weight: 600; cursor: pointer; min-height: 40px;
+}
+.del[data-armed="1"] { background: var(--danger); border-color: var(--danger); color: var(--bg); }
+.empty { margin: 28px 0; color: var(--muted); }
+#toast {
+  position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom));
+  transform: translate(-50%, 20px); background: var(--ink); color: var(--bg);
+  padding: 12px 18px; border-radius: 10px; font-weight: 600; opacity: 0; pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s; max-width: calc(100% - 36px); text-align: center;
+}
+#toast.show { opacity: 1; transform: translate(-50%, 0); }
+dialog {
+  border: 0; border-radius: 14px; padding: 22px; width: min(92vw, 520px);
+  background: var(--bg); color: var(--ink);
+}
+dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+dialog h2 { margin: 0 0 14px; font-size: 22px; }
+label { display: block; margin: 14px 0 6px; font-weight: 600; }
+.hint { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+.actions { display: flex; align-items: center; justify-content: space-between; margin-top: 22px; }
+@media (prefers-reduced-motion: reduce) { #toast { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>yt_viewer</h1>
+      <p id="status">Загрузка…</p>
+    </div>
+    <button class="link" id="open-settings" type="button">Настройки</button>
+  </header>
+
+  <form class="add" id="add-form" autocomplete="off">
+    <input id="url" type="text" inputmode="url" placeholder="Ссылка на видео YouTube" aria-label="Ссылка на видео YouTube">
+    <button class="primary" id="add-btn" type="submit">Добавить</button>
+  </form>
+
+  <ul id="list"></ul>
+  <p class="empty" id="empty" hidden>Очередь пуста. В приложении YouTube нажмите «Поделиться» и выберите «yt_viewer».</p>
+</main>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<dialog id="settings">
+  <h2>Настройки</h2>
+  <label for="repo">Репозиторий GitHub</label>
+  <input id="repo" type="text" placeholder="логин/yt_viewer" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <label for="branch">Ветка</label>
+  <input id="branch" type="text" placeholder="main" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <label for="token">Токен</label>
+  <input id="token" type="password" placeholder="github_pat_…" autocomplete="off" autocapitalize="off" spellcheck="false">
+  <p class="hint">Токен хранится только в этом телефоне и нужен, чтобы записывать ссылки в репозиторий.</p>
+  <div class="actions">
+    <button class="link" id="close-settings" type="button">Закрыть</button>
+    <button class="primary" id="save-settings" type="button">Сохранить</button>
+  </div>
+</dialog>
+
+<script>
+(() => {
+  'use strict';
+
+  const $ = (id) => document.getElementById(id);
+  const LS_KEY = 'ytq.settings.v1';
+  const state = { items: [], busy: false, updated: null };
+
+  // ---------- настройки ----------
+  function defaults() {
+    const host = location.hostname;
+    let repo = '';
+    if (host.endsWith('.github.io')) {
+      const owner = host.split('.')[0];
+      const name = location.pathname.split('/')[1];
+      if (owner && name) repo = owner + '/' + name;
+    }
+    return { repo, branch: 'main', token: '' };
+  }
+  function loadSettings() {
+    let stored = {};
+    try { stored = JSON.parse(localStorage.getItem(LS_KEY) || '{}'); } catch (e) { stored = {}; }
+    return Object.assign(defaults(), stored);
+  }
+  function saveSettings() {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(settings)); } catch (e) { /* ignore */ }
+  }
+  let settings = loadSettings();
+  const ready = () => Boolean(settings.repo && settings.token && settings.branch);
+
+  // ---------- подсказки ----------
+  let toastTimer = null;
+  function toast(text) {
+    const t = $('toast');
+    t.textContent = text;
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('show'), 3200);
+  }
+
+  function ago(iso) {
+    const t = Date.parse(iso);
+    if (!t) return '';
+    const min = Math.round((Date.now() - t) / 60000);
+    if (min < 1) return 'только что';
+    if (min < 60) return min + ' мин назад';
+    const h = Math.round(min / 60);
+    if (h < 24) return h + ' ч назад';
+    const d = Math.round(h / 24);
+    if (d === 1) return 'вчера';
+    return d + ' дн. назад';
+  }
+
+  // ---------- base64 для UTF-8 ----------
+  function toB64(str) {
+    const bytes = new TextEncoder().encode(str);
+    let bin = '';
+    bytes.forEach((b) => { bin += String.fromCharCode(b); });
+    return btoa(bin);
+  }
+  function fromB64(b64) {
+    const bin = atob(b64.replace(/\s/g, ''));
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  }
+
+  // ---------- GitHub ----------
+  async function gh(method, body) {
+    const base = 'https://api.github.com/repos/' + settings.repo + '/contents/queue.json';
+    const url = method === 'GET'
+      ? base + '?ref=' + encodeURIComponent(settings.branch) + '&t=' + Date.now()
+      : base;
+    const headers = {
+      'Authorization': 'Bearer ' + settings.token,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28'
+    };
+    if (body) headers['Content-Type'] = 'application/json';
+    return fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
+  }
+
+  async function apiError(res) {
+    if (res.status === 401) return new Error('Токен не подходит или истёк. Создайте новый в настройках GitHub.');
+    if (res.status === 403) return new Error('Нет прав на запись. Проверьте права токена: Contents — Read and write.');
+    if (res.status === 404) return new Error('Репозиторий или ветка не найдены. Проверьте настройки.');
+    return new Error('Ошибка GitHub: ' + res.status);
+  }
+
+  async function readQueue() {
+    const res = await gh('GET');
+    if (res.status === 404) return { items: [], sha: null };
+    if (!res.ok) throw await apiError(res);
+    const json = await res.json();
+    let items = [];
+    try {
+      const parsed = JSON.parse(fromB64(json.content));
+      if (Array.isArray(parsed)) items = parsed;
+    } catch (e) { items = []; }
+    return { items, sha: json.sha };
+  }
+
+  async function mutate(fn, message) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { items, sha } = await readQueue();
+      const next = fn(items);
+      if (next === null) return { items, unchanged: true };
+      const body = {
+        message,
+        content: toB64(JSON.stringify(next, null, 2) + '\n'),
+        branch: settings.branch
+      };
+      if (sha) body.sha = sha;
+      const res = await gh('PUT', body);
+      if (res.ok) return { items: next };
+      if (res.status === 409 || res.status === 422) continue;
+      throw await apiError(res);
+    }
+    throw new Error('Не удалось записать: список менялся одновременно. Повторите.');
+  }
+
+  function explain(e) {
+    if (e instanceof TypeError) return 'Нет связи с интернетом.';
+    return e && e.message ? e.message : 'Что-то пошло не так.';
+  }
+
+  // ---------- ссылки YouTube ----------
+  function parseVideo(text) {
+    const found = (text || '').match(/https?:\/\/[^\s]+/g) || [];
+    for (const raw of found) {
+      let u;
+      try { u = new URL(raw); } catch (e) { continue; }
+      const host = u.hostname.replace(/^(www\.|m\.|music\.)/, '');
+      let id = null;
+      if (host === 'youtu.be') {
+        id = u.pathname.slice(1).split('/')[0];
+      } else if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+        if (u.pathname === '/playlist') return { playlist: true };
+        if (u.pathname === '/watch') {
+          id = u.searchParams.get('v');
+        } else {
+          const m = u.pathname.match(/^\/(shorts|live|embed)\/([\w-]{6,})/);
+          if (m) id = m[2];
+        }
+      }
+      if (id && /^[\w-]{6,}$/.test(id)) {
+        return { id, url: 'https://www.youtube.com/watch?v=' + id };
+      }
+    }
+    return null;
+  }
+
+  async function fetchTitle(url) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4000);
+      const res = await fetch('https://noembed.com/embed?url=' + encodeURIComponent(url), { signal: ctrl.signal });
+      clearTimeout(timer);
+      const json = await res.json();
+      return json.title || '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  // ---------- действия ----------
+  function setBusy(on) {
+    state.busy = on;
+    $('add-btn').disabled = on;
+  }
+
+  async function addLink(text, hintTitle) {
+    const video = parseVideo(text);
+    if (!video) { toast('Не нашёл ссылку на видео YouTube.'); return false; }
+    if (video.playlist) { toast('Это плейлист. Отправьте ссылку на отдельное видео.'); return false; }
+    if (!ready()) { openSettings(); toast('Сначала заполните настройки.'); return false; }
+    if (state.busy) return false;
+    setBusy(true);
+    try {
+      const title = (hintTitle && !/https?:\/\//.test(hintTitle) ? hintTitle : '') ||
+                    (await fetchTitle(video.url)) || video.url;
+      const result = await mutate((items) => {
+        if (items.some((i) => i.id === video.id)) return null;
+        return items.concat([{ id: video.id, url: video.url, title, added: new Date().toISOString() }]);
+      }, 'Добавлено: ' + title);
+      state.items = result.items;
+      state.updated = new Date();
+      render();
+      toast(result.unchanged ? 'Это видео уже в очереди.' : 'Добавлено.');
+      return true;
+    } catch (e) {
+      toast(explain(e));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeItem(id) {
+    if (state.busy) return;
+    setBusy(true);
+    try {
+      const result = await mutate((items) => items.filter((i) => i.id !== id), 'Удалено');
+      state.items = result.items;
+      state.updated = new Date();
+      render();
+      toast('Удалено.');
+    } catch (e) {
+      toast(explain(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refresh() {
+    if (!ready()) {
+      $('status').textContent = 'Нужно заполнить настройки';
+      render();
+      return;
+    }
+    $('status').textContent = 'Обновляю…';
+    try {
+      const { items } = await readQueue();
+      state.items = items;
+      state.updated = new Date();
+      render();
+    } catch (e) {
+      $('status').textContent = 'Не удалось загрузить список';
+      toast(explain(e));
+    }
+  }
+
+  // ---------- отображение ----------
+  function updateStatus() {
+    if (!ready()) { $('status').textContent = 'Нужно заполнить настройки'; return; }
+    const time = state.updated
+      ? state.updated.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+      : '';
+    $('status').textContent = state.items.length + ' видео' + (time ? ', обновлено ' + time : '');
+  }
+
+  function render() {
+    const list = $('list');
+    list.textContent = '';
+    state.items.forEach((item) => {
+      const li = document.createElement('li');
+
+      const title = document.createElement('div');
+      title.className = 'title';
+      title.textContent = item.title || item.url;
+
+      const row = document.createElement('div');
+      row.className = 'row';
+
+      const when = document.createElement('span');
+      when.className = 'when';
+      when.textContent = ago(item.added);
+
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'del';
+      del.textContent = 'Удалить';
+      let timer = null;
+      del.addEventListener('click', () => {
+        if (del.dataset.armed !== '1') {
+          del.dataset.armed = '1';
+          del.textContent = 'Точно удалить?';
+          timer = setTimeout(() => { del.dataset.armed = '0'; del.textContent = 'Удалить'; }, 3000);
+          return;
+        }
+        clearTimeout(timer);
+        removeItem(item.id);
+      });
+
+      row.append(when, del);
+      li.append(title, row);
+      list.append(li);
+    });
+    $('empty').hidden = state.items.length > 0 || !ready();
+    updateStatus();
+  }
+
+  // ---------- настройки: окно ----------
+  function openSettings() {
+    $('repo').value = settings.repo;
+    $('branch').value = settings.branch;
+    $('token').value = settings.token;
+    const dlg = $('settings');
+    if (!dlg.open) dlg.showModal();
+  }
+
+  $('open-settings').addEventListener('click', openSettings);
+  $('close-settings').addEventListener('click', () => $('settings').close());
+  $('save-settings').addEventListener('click', () => {
+    settings.repo = $('repo').value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\/+$/, '');
+    settings.branch = $('branch').value.trim() || 'main';
+    settings.token = $('token').value.trim();
+    saveSettings();
+    $('settings').close();
+    toast('Сохранено.');
+    refresh();
+  });
+
+  $('add-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const field = $('url');
+    const ok = await addLink(field.value, '');
+    if (ok) field.value = '';
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && !state.busy) refresh();
+  });
+
+  // ---------- запуск ----------
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+
+  render();
+
+  const params = new URLSearchParams(location.search);
+  const shared = [params.get('url'), params.get('text')].filter(Boolean).join(' ');
+  if (shared) {
+    const sharedTitle = params.get('title') || '';
+    history.replaceState(null, '', location.pathname);
+    addLink(shared, sharedTitle);
+  } else {
+    refresh();
+  }
+})();
+</script>
+</body>
+</html>
