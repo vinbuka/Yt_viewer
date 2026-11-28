@@ -102,12 +102,12 @@ label { display: block; margin: 14px 0 6px; font-weight: 600; }
   </header>
 
   <form class="add" id="add-form" autocomplete="off">
-    <input id="url" type="text" inputmode="url" placeholder="Ссылка на видео YouTube" aria-label="Ссылка на видео YouTube">
+    <input id="url" type="text" inputmode="url" placeholder="Ссылка на видео (YouTube, Twitch и другие)" aria-label="Ссылка на видео">
     <button class="primary" id="add-btn" type="submit">Добавить</button>
   </form>
 
   <ul id="list"></ul>
-  <p class="empty" id="empty" hidden>Очередь пуста. В приложении YouTube нажмите «Поделиться» и выберите «yt_viewer».</p>
+  <p class="empty" id="empty" hidden>Очередь пуста. В YouTube, Twitch или другом приложении нажмите «Поделиться» и выберите «yt_viewer».</p>
 </main>
 
 <div id="toast" role="status" aria-live="polite"></div>
@@ -252,42 +252,78 @@ label { display: block; margin: 14px 0 6px; font-weight: 600; }
     return e && e.message ? e.message : 'Что-то пошло не так.';
   }
 
-  // ---------- ссылки YouTube ----------
+  // ---------- ссылки ----------
+  function hashString(str) {
+    let h1 = 5381, h2 = 7919;
+    for (let i = 0; i < str.length; i++) {
+      const ch = str.charCodeAt(i);
+      h1 = ((h1 * 33) ^ ch) >>> 0;
+      h2 = ((h2 * 31) + ch) >>> 0;
+    }
+    return h1.toString(36) + h2.toString(36);
+  }
+
+  // Убираем из чужих ссылок «хвосты» отслеживания, чтобы одно видео не добавлялось дважды.
+  function cleanGeneric(u) {
+    const drop = ['fbclid', 'gclid', 'si', 'igshid', 'feature', 'ref', 'ref_src'];
+    for (const key of Array.from(u.searchParams.keys())) {
+      if (key.startsWith('utm_') || drop.includes(key)) u.searchParams.delete(key);
+    }
+    u.hash = '';
+    return u.toString();
+  }
+
   function parseVideo(text) {
     const found = (text || '').match(/https?:\/\/[^\s]+/g) || [];
     for (const raw of found) {
       let u;
-      try { u = new URL(raw); } catch (e) { continue; }
+      try { u = new URL(raw.replace(/[)\].,;]+$/, '')); } catch (e) { continue; }
       const host = u.hostname.replace(/^(www\.|m\.|music\.)/, '');
-      let id = null;
-      if (host === 'youtu.be') {
-        id = u.pathname.slice(1).split('/')[0];
-      } else if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
-        if (u.pathname === '/playlist') return { playlist: true };
-        if (u.pathname === '/watch') {
-          id = u.searchParams.get('v');
+      if (host === 'youtu.be' || host === 'youtube.com' || host === 'youtube-nocookie.com') {
+        let id = null;
+        if (host === 'youtu.be') {
+          id = u.pathname.slice(1).split('/')[0];
         } else {
-          const m = u.pathname.match(/^\/(shorts|live|embed)\/([\w-]{6,})/);
-          if (m) id = m[2];
+          if (u.pathname === '/playlist') return { playlist: true };
+          if (u.pathname === '/watch') {
+            id = u.searchParams.get('v');
+          } else {
+            const m = u.pathname.match(/^\/(shorts|live|embed)\/([\w-]{6,})/);
+            if (m) id = m[2];
+          }
         }
+        if (id && /^[\w-]{6,}$/.test(id)) {
+          return { id, url: 'https://www.youtube.com/watch?v=' + id, youtube: true, host };
+        }
+        continue;
       }
-      if (id && /^[\w-]{6,}$/.test(id)) {
-        return { id, url: 'https://www.youtube.com/watch?v=' + id };
-      }
+      // любой другой сайт (Twitch, Vimeo, VK и т.д.): номер видео считаем по ссылке
+      const url = cleanGeneric(u);
+      return { id: 'w.' + hashString(url), url, youtube: false, host };
     }
     return null;
   }
 
-  async function fetchTitle(url) {
+  async function fetchMeta(url) {
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 4000);
       const res = await fetch('https://noembed.com/embed?url=' + encodeURIComponent(url), { signal: ctrl.signal });
       clearTimeout(timer);
       const json = await res.json();
-      return json.title || '';
+      return { title: json.title || '', thumb: json.thumbnail_url || '' };
     } catch (e) {
-      return '';
+      return { title: '', thumb: '' };
+    }
+  }
+
+  function fallbackTitle(video) {
+    try {
+      const u = new URL(video.url);
+      const last = decodeURIComponent(u.pathname.split('/').filter(Boolean).pop() || '');
+      return last ? video.host + ' / ' + last : video.host;
+    } catch (e) {
+      return video.url;
     }
   }
 
@@ -299,17 +335,20 @@ label { display: block; margin: 14px 0 6px; font-weight: 600; }
 
   async function addLink(text, hintTitle) {
     const video = parseVideo(text);
-    if (!video) { toast('Не нашёл ссылку на видео YouTube.'); return false; }
+    if (!video) { toast('Не нашёл ссылку на видео.'); return false; }
     if (video.playlist) { toast('Это плейлист. Отправьте ссылку на отдельное видео.'); return false; }
     if (!ready()) { openSettings(); toast('Сначала заполните настройки.'); return false; }
     if (state.busy) return false;
     setBusy(true);
     try {
+      const meta = await fetchMeta(video.url);
       const title = (hintTitle && !/https?:\/\//.test(hintTitle) ? hintTitle : '') ||
-                    (await fetchTitle(video.url)) || video.url;
+                    meta.title || fallbackTitle(video);
       const result = await mutate((items) => {
         if (items.some((i) => i.id === video.id)) return null;
-        return items.concat([{ id: video.id, url: video.url, title, added: new Date().toISOString() }]);
+        const entry = { id: video.id, url: video.url, title, added: new Date().toISOString() };
+        if (!video.youtube && meta.thumb) entry.thumb = meta.thumb;
+        return items.concat([entry]);
       }, 'Добавлено: ' + title);
       state.items = result.items;
       state.updated = new Date();
@@ -382,7 +421,12 @@ label { display: block; margin: 14px 0 6px; font-weight: 600; }
 
       const when = document.createElement('span');
       when.className = 'when';
-      when.textContent = ago(item.added);
+      let site = '';
+      try {
+        const h = new URL(item.url).hostname.replace(/^www\./, '');
+        if (!/(^|\.)youtube\.com$/.test(h)) site = h + ', ';
+      } catch (e) { /* ignore */ }
+      when.textContent = site + ago(item.added);
 
       const del = document.createElement('button');
       del.type = 'button';
